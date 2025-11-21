@@ -1,13 +1,8 @@
 <!-- pay-backend/private_posts/ax6000-openwrt.html -->
 <h2>AX6000 OpenWrt 终极付费教程（完整版）</h2>
+<p>感谢支持！下面是完整的付费内容，包含所有步骤、脚本与注意事项 —— 请务必阅读免责声明并备份好原始固件和 boot 分区。</p>
 
-<p>感谢支持！下面是完整的付费内容，包含所有步骤、脚本与注意事项。</p>
-
-<!-- 可换成你仓库 public 下的图片或外链 -->
-<p><img src="/mnt/data/E5EDC460-4265-4ACF-92C2-25834120A5A3.png" alt="AX6000" style="max-width:100%;height:auto;"></p>
-
-<hr>
-
+<hr/>
 <h3>概览（你将学到）</h3>
 <ul>
   <li>如何安全刷入 U-Boot 并备份</li>
@@ -17,25 +12,23 @@
   <li>全部用到的脚本与下载链接（可直接复制粘贴）</li>
 </ul>
 
-<hr>
+<hr/>
+<h3>第 0 步：免责声明</h3>
+<p><strong>风险提醒：</strong>刷机有风险，可能导致设备不可用。请先备份原始固件与 boot 分区，并确认你能自行承担风险。</p>
 
-<h3>第 0 步：免责声明与准备</h3>
-<p><strong>风险提醒：</strong>刷机有风险。请先备份原始固件和 boot 分区。下列步骤均需在你确认可以承担风险时执行。</p>
-
-<h3>第 1 步：准备（Win/Mac/Linux）</h3>
+<h3>第 1 步：准备（Windows / macOS / Linux）</h3>
 <ol>
-  <li>下载工具：WinSCP、PuTTY（或在 Mac 用 ssh）</li>
-  <li>为安全起见在本地创建一个工作目录：<code>mkdir ~/ax6000-backup</code></li>
-  <li>准备一个可以访问路由器的网线与静态 IP（说明见下面）</li>
+  <li>下载工具：WinSCP、PuTTY（或 macOS 的 ssh）</li>
+  <li>在本地创建工作目录：<code>mkdir ~/ax6000-backup</code></li>
+  <li>准备一根网线并设置静态 IP（示例见下）</li>
 </ol>
 
-<h3>第 2 步：获取 stok / 进入开发者模式（命令 & 示例）</h3>
-<p>示例命令（把 <code>{token}</code> 换成你实际获得的 stok）:</p>
-<pre><code>http://192.168.31.1/cgi-bin/luci/;stok={token}/api/misystem/set_sys_time?timezone=... </code></pre>
-<p>（视频中方法请参照主文档）</p>
+<h3>第 2 步：进入开发者模式并获取 stok</h3>
+<p>示例（把 <code>{token}</code> 替换成你实际的 stok）：</p>
+<pre><code>http://192.168.31.1/cgi-bin/luci/;stok={token}/api/misystem/set_sys_time?timezone=...</code></pre>
 
-<h3>第 3 步：设置 SSH 并保持生存（脚本）</h3>
-<p>把下面脚本保存为 <code>auto_ssh.sh</code> 并上传到 /tmp，然后运行：</p>
+<h3>第 3 步：开启 SSH 并保持（脚本）</h3>
+<p>保存为 <code>auto_ssh.sh</code> 并上传到 <code>/tmp</code>，然后运行：</p>
 <pre><code>echo -e 'admin\nadmin' | passwd root
 nvram set ssh_en=1
 nvram set telnet_en=1
@@ -47,16 +40,15 @@ sed -i 's/channel=.*/channel="debug"/g' /etc/init.d/dropbear
 
 <h3>第 4 步：刷入 U-Boot（在线方式）</h3>
 <pre><code>cd /tmp && curl -s -O https://fastly.jsdelivr.net/gh/miaoermua/unlock-redmi-ax6000@main/setup.sh && chmod +x setup.sh && ./setup.sh</code></pre>
-<p>如需离线：上传 <code>uboot.sh</code> 到 /tmp 并运行。</p>
 
-<h3>第 5 步：备份与恢复要点</h3>
+<h3>第 5 步：备份与恢复</h3>
 <ul>
-  <li>刷入前请先备份分区：示例命令 <code>dd if=/dev/mtdblockX of=/tmp/backup-mtdX.bin bs=4M</code></li>
-  <li>备份文件通过 WinSCP 下载到本地保存</li>
+  <li>备份分区示例：<code>dd if=/dev/mtdblockX of=/tmp/backup-mtdX.bin bs=4M</code></li>
+  <li>通过 WinSCP 下载备份到本地保存</li>
 </ul>
 
-<hr>
-<h3>全部脚本与资源（可直接复制）</h3>
+<hr/>
+<h3>全部脚本（可复制）</h3>
 <pre><code># auto_ssh.sh (示例)
 echo -e 'admin\nadmin' | passwd root
 nvram set ssh_en=1
@@ -65,10 +57,9 @@ nvram commit
 /etc/init.d/dropbear restart
 </code></pre>
 
-<hr>
+<hr/>
 <h3>常见故障排查</h3>
-<p>1. 设备无法启动 → 尝试从备份恢复 U-Boot、或使用串口进入恢复模式。<br>
-2. 无法登录 SSH → 使用串口或 WinSCP 检查 /etc/passwd 与 dropbear.</p>
+<p>1. 设备无法启动 → 尝试从备份恢复 U-Boot。<br>
+2. 无法登录 SSH → 使用串口或 WinSCP 检查 /etc/passwd 与 dropbear。</p>
 
-<hr>
-<p style="font-size:0.9em;color:#777">注：如果你想我把图片与脚本也上传到仓库（把图片放 public/ 或把脚本放 pay-backend/scripts/），我可以把完整 commit 内容给你，或帮你直接提交 PR。</p>
+<p style="font-size:0.9em;color:#777">如需我把图片/脚本也放到仓库（public/ 或 pay-backend/scripts/），我可以直接给出可提交的 commit/PR 内容。</p>
