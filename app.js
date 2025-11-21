@@ -6,7 +6,8 @@ const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const morgan = require('morgan');
 const { nanoid } = require('nanoid');
-const { Low, JSONFile } = require('lowdb');
+const { Low } = require('lowdb');
+const { JSONFile } = require('lowdb/node');
 
 const app = express();
 app.use(morgan('combined'));
