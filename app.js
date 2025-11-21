@@ -1,131 +1,207 @@
-// app.js – Render friendly (no native modules)
+// app.js – Pay backend (with CORS and improved error handling)
+// Minimal dependencies, designed to run on Render / similar PaaS
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const morgan = require('morgan');
+const cors = require('cors');
 const { nanoid } = require('nanoid');
 const { Low } = require('lowdb');
 const { JSONFile } = require('lowdb/node');
 
 const app = express();
 app.use(morgan('combined'));
-app.use(bodyParser.json());
+
+// Body parsers
+app.use(bodyParser.json({ limit: '1mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
 
-/* ============ ENV ============ */
-const PORT = process.env.PORT || 3000;
-const SITE_URL = process.env.SITE_URL || ''; // Render domain
-const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
+/* ---------------- ENV ---------------- */
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const SITE_URL = process.env.SITE_URL || ''; // e.g. https://hanscn.com
+const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret'; // change in production
 const PAID_COOKIE_NAME = process.env.PAID_COOKIE_NAME || 'paid_token';
 const COOKIE_MAX_AGE = parseInt(process.env.COOKIE_MAX_AGE || '86400', 10);
 
-/* ============ DB ============ */
+/* ---------------- CORS ---------------- */
+/*
+  Allow cross-origin requests from your blog front-end.
+  If SITE_URL is set, restrict to that origin; otherwise allow all.
+  You can change this to a strict whitelist if needed.
+*/
+if (SITE_URL) {
+  app.use(cors({ origin: SITE_URL, credentials: true }));
+} else {
+  app.use(cors()); // permissive for testing; tighten in production
+}
+
+/* ---------------- DB (lowdb) ---------------- */
 const DB_DIR = path.join(__dirname, 'db');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 
 const dbFile = path.join(DB_DIR, 'orders.json');
 const adapter = new JSONFile(dbFile);
-const db = new Low(adapter, { orders: [] });
+const db = new Low(adapter);
 
+// initialize DB safely
 async function initDB() {
-  await db.read();
+  await db.read().catch(() => { /* ignore read errors */ });
   db.data = db.data || { orders: [] };
   await db.write();
 }
 initDB();
 
-/* ============ Helpers ============ */
+/* ---------------- Helpers ---------------- */
 function issueToken(postId, trade_no) {
-  return jwt.sign(
-    { postId, trade_no },
-    JWT_SECRET,
-    { expiresIn: '24h' }
-  );
+  return jwt.sign({ postId, trade_no }, JWT_SECRET, { expiresIn: '24h' });
 }
 
-/* ============ API ============ */
+/* ---------------- Routes ---------------- */
 
-// 1) Create order
+/**
+ * create-order
+ * POST { post_id, amount }
+ * returns { ok:true, trade_no }
+ */
 app.post('/api/create-order', async (req, res) => {
-  const { post_id, amount } = req.body;
+  const { post_id, amount = 199 } = req.body || {};
   if (!post_id) return res.status(400).json({ ok: false, error: 'post_id required' });
 
+  await initDB();
   const trade_no = `${Date.now()}_${nanoid(6)}`;
 
   db.data.orders.push({
     trade_no,
     post_id,
     amount,
-    paid: false
+    status: 'PENDING',
+    token: null,
+    created_at: new Date().toISOString(),
+    paid_at: null
   });
-  await db.write();
 
-  res.json({ ok: true, trade_no });
+  await db.write();
+  return res.json({ ok: true, trade_no });
 });
 
-// 2) Payment notify (simulate payment)
+/**
+ * payment-notify
+ * third-party or tester will call this to mark as paid
+ * accept JSON or form fields: trade_no, post_id, amount
+ */
 app.post('/api/payment-notify', async (req, res) => {
-  const { trade_no, post_id, amount } = req.body;
-  if (!trade_no) return res.status(400).send('trade_no required');
+  const data = Object.assign({}, req.body, req.query);
+  const trade_no = data.trade_no || data.out_trade_no || data.transaction_id || null;
+  const post_id = data.post_id || data.post || data.attach || null;
+  const amount = data.amount || data.total_fee || data.fee || null;
 
-  const order = db.data.orders.find(o => o.trade_no === trade_no);
-  if (!order) return res.status(404).send('order not found');
+  if (!trade_no || !post_id) return res.status(400).send('missing trade_no or post_id');
 
-  order.paid = true;
-  order.amount = amount || order.amount;
-  order.post_id = post_id || order.post_id;
+  await initDB();
+  const idx = db.data.orders.findIndex(o => o.trade_no === trade_no);
+  const token = issueToken(post_id, trade_no);
+
+  if (idx >= 0) {
+    db.data.orders[idx].status = 'PAID';
+    db.data.orders[idx].token = token;
+    db.data.orders[idx].paid_at = new Date().toISOString();
+    if (amount) db.data.orders[idx].amount = amount;
+  } else {
+    db.data.orders.push({
+      trade_no,
+      post_id,
+      amount,
+      status: 'PAID',
+      token,
+      created_at: new Date().toISOString(),
+      paid_at: new Date().toISOString()
+    });
+  }
 
   await db.write();
-
-  res.send('OK');
+  // return OK for scanners and payment gateways
+  return res.send('OK');
 });
 
-// 3) Check payment
+/**
+ * check-payment?trade_no=xxx
+ */
 app.get('/api/check-payment', async (req, res) => {
   const { trade_no } = req.query;
+  if (!trade_no) return res.status(400).json({ error: 'trade_no required' });
 
-  const order = db.data.orders.find(o => o.trade_no === trade_no);
-  if (!order) return res.json({ paid: false });
+  await initDB();
+  const row = db.data.orders.find(o => o.trade_no === trade_no);
+  if (!row) return res.json({ paid: false });
 
-  if (!order.paid) return res.json({ paid: false });
-
-  const token = issueToken(order.post_id, order.trade_no);
-
-  res.json({
-    paid: true,
-    token,
-    post_id: order.post_id
-  });
+  if (row.status === 'PAID') return res.json({ paid: true, token: row.token, post_id: row.post_id });
+  return res.json({ paid: false });
 });
 
-// 4) Read paid content (THIS IS THE KEY PART)
-app.get('/api/get-post', (req, res) => {
-  const auth = req.headers.authorization;
+/**
+ * exchange-session?trade_no=xxx&post=yyy
+ * sets HttpOnly cookie and redirects to article (optional)
+ * If your frontend uses localStorage token instead, this endpoint can be optional.
+ */
+app.get('/api/exchange-session', async (req, res) => {
+  const trade_no = req.query.trade_no;
+  const post = req.query.post;
+  if (!trade_no || !post) return res.status(400).send('missing trade_no or post');
 
-  if (!auth || !auth.startsWith('Bearer '))
-    return res.status(401).json({ error: 'missing token' });
+  await initDB();
+  const row = db.data.orders.find(o => o.trade_no === trade_no && o.post_id === post);
+  if (!row || row.status !== 'PAID') return res.redirect(`${SITE_URL || '/'}?_pay=failed`);
 
-  const token = auth.replace('Bearer ', '');
+  const token = row.token;
+  const cookieStr = `${PAID_COOKIE_NAME}=${token}; HttpOnly; Path=/; Max-Age=${COOKIE_MAX_AGE}`;
+  // If you want Secure cookies when your site uses HTTPS, add ; Secure
+  res.setHeader('Set-Cookie', cookieStr);
+
+  const articleUrl = `${SITE_URL || ''}/post/${encodeURIComponent(post)}`;
+  return res.redirect(302, articleUrl);
+});
+
+/**
+ * get-post?postId=xxx  (returns HTML of private post)
+ * Authorization: Bearer <token>
+ */
+app.get('/api/get-post', async (req, res) => {
+  let token = null;
+  const auth = req.headers.authorization || '';
+  if (auth.startsWith('Bearer ')) token = auth.split(' ')[1];
+  if (!token) {
+    // Also allow cookie auth if needed
+    const cookies = req.headers.cookie || '';
+    const m = cookies.match(new RegExp('(?:^|; )' + PAID_COOKIE_NAME + '=([^;]+)'));
+    if (m) token = m[1];
+  }
+  if (!token) return res.status(401).json({ error: 'no token' });
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const postId = decoded.postId;
-
-    const filePath = path.join(__dirname, 'private_posts', `${postId}.html`);
-    if (!fs.existsSync(filePath))
-      return res.status(404).json({ error: 'post not found' });
-
-    const html = fs.readFileSync(filePath, 'utf-8');
-    res.json({ html });
-
+    const payload = jwt.verify(token, JWT_SECRET);
+    const postId = payload.postId;
+    const file = path.join(__dirname, 'private_posts', `${postId}.html`);
+    if (!fs.existsSync(file)) return res.status(404).json({ error: 'post not found' });
+    const html = fs.readFileSync(file, 'utf8');
+    return res.json({ html });
   } catch (e) {
     return res.status(401).json({ error: 'invalid or expired token' });
   }
 });
 
-/* ============ Start ============ */
+/**
+ * admin/orders - list recent orders (no auth - protect in production)
+ */
+app.get('/admin/orders', async (req, res) => {
+  await initDB();
+  // simple JSON dump: show most recent first
+  return res.json(db.data.orders.slice().reverse().slice(0, 200));
+});
+
+/* ---------------- Start server ---------------- */
 app.listen(PORT, () => {
   console.log(`Pay backend listening on port ${PORT}`);
+  if (SITE_URL) console.log(`Configured SITE_URL=${SITE_URL}`);
 });
