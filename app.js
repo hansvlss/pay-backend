@@ -26,7 +26,7 @@ const DB_DIR = path.join(__dirname, 'db');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 const dbFile = path.join(DB_DIR, 'orders.json');
 const adapter = new JSONFile(dbFile);
-const db = new Low(adapter);
+const db = new Low(adapter, { orders: [] });   // 加上默认数据
 async function initDB() {
   await db.read();
   db.data = db.data || { orders: [] };
